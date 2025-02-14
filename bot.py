@@ -59,16 +59,20 @@ def fetch_single_info(query):
 async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
 
-async def play_next(ctx):
-    guild_id = ctx.guild.id
+async def play_next():
+    global globalCtx
+    if not globalCtx:
+        return
+    
+    guild_id = globalCtx.guild.id
     queue = get_queue(guild_id)
 
     if queue:
         song_info = queue.popleft()
-        await play_song(ctx, song_info)
+        await play_song(song_info)
     else:
-        await ctx.send("🎵 Fila de reprodução vazia, saindo do canal de voz!")
-        await ctx.voice_client.disconnect()
+        await globalCtx.send("🎵 Fila de reprodução vazia, saindo do canal de voz!")
+        await globalCtx.voice_client.disconnect()
 
 async def create_song_embed(song_info, queue_position=None):
     embed = discord.Embed(
@@ -94,16 +98,19 @@ async def create_song_embed(song_info, queue_position=None):
     
     return embed
 
-async def play_song(ctx, song_info):
-    """Plays a song using the provided song information"""
-    vc = ctx.voice_client
-
+async def play_song(song_info):
+    global globalCtx
+    
+    if not globalCtx:
+        return
+    
+    vc = globalCtx.voice_client
+    
     if not vc:
-        channel = ctx.author.voice.channel
+        channel = globalCtx.author.voice.channel
         await channel.connect()
-        vc = ctx.voice_client
+        vc = globalCtx.voice_client
 
- 
     if vc.is_playing() or vc.is_paused():
         vc.stop()
         await asyncio.sleep(1)  
@@ -114,23 +121,40 @@ async def play_song(ctx, song_info):
     }
 
     vc.play(discord.FFmpegPCMAudio(song_info['url'], **FFMPEG_OPTIONS),
-            after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
+            after=lambda e: asyncio.run_coroutine_threadsafe(play_next(), bot.loop))
 
     embed = await create_song_embed(song_info)
-    await ctx.send(embed=embed)
-
+    await globalCtx.send(embed=embed)
 
 @bot.command()
 async def start(ctx):
+    global globalCtx
     globalCtx = ctx
-    
+    await ctx.send("🎶 Contexto global definido!")
+
+@bot.command()
+async def pause(ctx):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.pause()
+        await ctx.send("⏸️ Música pausada!")
+    else:
+        await ctx.send("❌ Nada está tocando agora.")
+
+@bot.command()
+async def unpause(ctx):
+    if ctx.voice_client and ctx.voice_client.is_paused():
+        ctx.voice_client.resume()
+        await ctx.send("▶️ Música retomada!")
+    else:
+        await ctx.send("❌ A música não está pausada.")
+
 @bot.command()
 async def play(ctx, *, query: str):
-    """Adds a song or playlist to the queue and plays it asynchronously"""
+    global globalCtx
+    globalCtx = ctx
     queue = get_queue(ctx.guild.id)
 
     async def fetch_song_info(query):
-        """Fetch song info using yt_dlp asynchronously"""
         ydl_opts = {
             'format': 'bestaudio/best',
             'noplaylist': True,
@@ -149,72 +173,14 @@ async def play(ctx, *, query: str):
                 'channel': info.get("uploader", "Unknown Channel")
             }
 
-    async def fetch_playlist_info(playlist_url):
-        """Fetch playlist songs info asynchronously"""
-        songs_info = await asyncio.to_thread(get_playlist_info, playlist_url)
-        return songs_info
-
-    if "playlist?" in query:
-        await ctx.send("🔄 Carregando playlist... Isso pode levar alguns segundos.")
-        songs_info = await fetch_playlist_info(query)
-
-        if not songs_info:
-            await ctx.send("❌ Não foi possível carregar a playlist.")
-            return
-
-        queue.extend(songs_info)
-
-        await ctx.send(f"📋 Adicionadas {len(songs_info)} músicas da playlist à fila.")
-
-        if not ctx.voice_client or not ctx.voice_client.is_playing():
-            await play_song(ctx, queue.popleft())
-
-    else:
-        await ctx.send("🔍 Buscando música...")
-
-        song_info = await fetch_song_info(f"ytsearch:{query}" if "youtube.com" not in query else query)
-
-        if ctx.voice_client and ctx.voice_client.is_playing():
-            queue.append(song_info)
-            embed = await create_song_embed(song_info, len(queue))
-            await ctx.send("🎵 Música adicionada à fila:", embed=embed)
-        else:
-            await play_song(ctx, song_info)
-
-
-@bot.command()
-async def queue(ctx):
-    queue = get_queue(ctx.guild.id)
-    if not queue:
-        await ctx.send("❌ A fila está vazia!")
-        return
-
-    embed = discord.Embed(
-        title="🎵 Fila de Reprodução",
-        color=discord.Color.blue()
-    )
-
-    for i, song_info in enumerate(queue, 1):
-        embed.add_field(
-            name=f"{i}. {song_info['title']}", 
-            value=f"Canal: {song_info['channel']}", 
-            inline=False
-        )
-
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def skip(ctx):
+    await ctx.send("🔍 Buscando música...")
+    song_info = await fetch_song_info(f"ytsearch:{query}" if "youtube.com" not in query else query)
+    
     if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-        await ctx.send("⏭️ Música pulada!")
-
-@bot.command()
-async def stop(ctx):
-    queue = get_queue(ctx.guild.id)
-    queue.clear()
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-    await ctx.send("⏹️ Reprodução parada e fila limpa!")
+        queue.append(song_info)
+        embed = await create_song_embed(song_info, len(queue))
+        await ctx.send("🎵 Música adicionada à fila:", embed=embed)
+    else:
+        await play_song(song_info)
 
 bot.run(TOKEN)
