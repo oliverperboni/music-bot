@@ -6,30 +6,26 @@ import asyncio
 from collections import deque
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# Set up Discord bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+globalCtx = None
 
-# Music queue (stores song info dictionaries for each server)
 queues = {}
 
 def get_queue(guild_id):
-    """Returns the queue for the guild"""
     if guild_id not in queues:
         queues[guild_id] = deque()
     return queues[guild_id]
 
 def get_playlist_info(playlist_url):
-    """Extracts all video information from a YouTube playlist"""
     ydl_opts = {
-        'quiet': True,
-        'extract_flat': True,
-        'force_generic_extractor': True
+        'format': 'bestaudio/best',
+        'noplaylist': False,
+        'quiet': True
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -43,15 +39,27 @@ def get_playlist_info(playlist_url):
                 'duration': entry.get("duration", 0),
                 'channel': entry.get("channel", "Unknown Channel")
             } for entry in info["entries"] if entry]
-
     return []
+
+def fetch_single_info(query):
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'quiet': True
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        is_url = "youtube.com" in query
+        return ydl.extract_info(
+            f"ytsearch:{query}" if not is_url else query,
+            download=False
+        )
 
 @bot.event
 async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
 
 async def play_next(ctx):
-    """Plays the next song in the queue"""
     guild_id = ctx.guild.id
     queue = get_queue(guild_id)
 
@@ -63,7 +71,6 @@ async def play_next(ctx):
         await ctx.voice_client.disconnect()
 
 async def create_song_embed(song_info, queue_position=None):
-    """Creates a rich embed for song information"""
     embed = discord.Embed(
         title=song_info['title'],
         url=song_info['url'],
@@ -96,54 +103,76 @@ async def play_song(ctx, song_info):
         await channel.connect()
         vc = ctx.voice_client
 
+ 
+    if vc.is_playing() or vc.is_paused():
+        vc.stop()
+        await asyncio.sleep(1)  
+
     FFMPEG_OPTIONS = {
         'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
         'options': '-vn'
     }
 
-    vc.stop()
-    vc.play(discord.FFmpegPCMAudio(song_info['url'], **FFMPEG_OPTIONS), 
+    vc.play(discord.FFmpegPCMAudio(song_info['url'], **FFMPEG_OPTIONS),
             after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
 
     embed = await create_song_embed(song_info)
     await ctx.send(embed=embed)
 
+
+@bot.command()
+async def start(ctx):
+    globalCtx = ctx
+    
 @bot.command()
 async def play(ctx, *, query: str):
-    """Adds a song or playlist to the queue and plays it"""
+    """Adds a song or playlist to the queue and plays it asynchronously"""
     queue = get_queue(ctx.guild.id)
 
-    if "playlist?" in query:
-        songs_info = get_playlist_info(query)
-        if not songs_info:
-            await ctx.send("❌ Não foi possível carregar a playlist.")
-            return
-
-        queue.extend(songs_info)
-        await ctx.send(f"📋 Adicionadas {len(songs_info)} músicas da playlist à fila.")
-
-        if not ctx.voice_client or not ctx.voice_client.is_playing():
-            await play_song(ctx, queue.popleft())
-    else:
+    async def fetch_song_info(query):
+        """Fetch song info using yt_dlp asynchronously"""
         ydl_opts = {
             'format': 'bestaudio/best',
             'noplaylist': True,
             'quiet': True
         }
-
+        loop = asyncio.get_event_loop()
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch:{query}" if "youtube.com" not in query else query, download=False)
-            
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(query, download=False))
             if "entries" in info:
                 info = info["entries"][0]
-
-            song_info = {
+            return {
                 'url': info["url"],
                 'title': info.get("title", "Unknown Title"),
                 'thumbnail': info.get("thumbnail", None),
                 'duration': info.get("duration", 0),
                 'channel': info.get("uploader", "Unknown Channel")
             }
+
+    async def fetch_playlist_info(playlist_url):
+        """Fetch playlist songs info asynchronously"""
+        songs_info = await asyncio.to_thread(get_playlist_info, playlist_url)
+        return songs_info
+
+    if "playlist?" in query:
+        await ctx.send("🔄 Carregando playlist... Isso pode levar alguns segundos.")
+        songs_info = await fetch_playlist_info(query)
+
+        if not songs_info:
+            await ctx.send("❌ Não foi possível carregar a playlist.")
+            return
+
+        queue.extend(songs_info)
+
+        await ctx.send(f"📋 Adicionadas {len(songs_info)} músicas da playlist à fila.")
+
+        if not ctx.voice_client or not ctx.voice_client.is_playing():
+            await play_song(ctx, queue.popleft())
+
+    else:
+        await ctx.send("🔍 Buscando música...")
+
+        song_info = await fetch_song_info(f"ytsearch:{query}" if "youtube.com" not in query else query)
 
         if ctx.voice_client and ctx.voice_client.is_playing():
             queue.append(song_info)
@@ -152,9 +181,9 @@ async def play(ctx, *, query: str):
         else:
             await play_song(ctx, song_info)
 
+
 @bot.command()
 async def queue(ctx):
-    """Shows the current queue"""
     queue = get_queue(ctx.guild.id)
     if not queue:
         await ctx.send("❌ A fila está vazia!")
@@ -176,14 +205,12 @@ async def queue(ctx):
 
 @bot.command()
 async def skip(ctx):
-    """Skips the current song"""
     if ctx.voice_client and ctx.voice_client.is_playing():
         ctx.voice_client.stop()
         await ctx.send("⏭️ Música pulada!")
 
 @bot.command()
 async def stop(ctx):
-    """Stops the music and clears the queue"""
     queue = get_queue(ctx.guild.id)
     queue.clear()
     if ctx.voice_client:
