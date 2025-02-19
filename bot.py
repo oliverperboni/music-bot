@@ -186,6 +186,18 @@ async def stop(ctx):
 async def root():
     return {"message": "Discord Bot API is running!"}
 
+
+@app.get("/start/")
+async def api_start():
+    """Set the global context for the bot."""
+    global globalCtx
+    if not globalCtx:
+        return {"error": "No Discord context set. Run !start in Discord."}
+    await globalCtx.invoke(bot.get_command("start"))
+    return {"status": "Global context set."}
+    
+   
+
 @app.post("/play/")
 async def api_play(request: SongRequest):
     global globalCtx
