@@ -51,7 +51,7 @@ async def play_song(song_info):
 
     FFMPEG_OPTIONS = {
         'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': '-vn volume=0.5'
+        'options': '-vn'
     }
 
     vc.play(discord.FFmpegPCMAudio(song_info['url'], **FFMPEG_OPTIONS),
@@ -268,9 +268,13 @@ async def api_queue():
 
 async def close_bot():
     """Gracefully closes the bot."""
-    
     print("Shutting down bot...")
-    await globalCtx.voice_client.disconnect()
+    for guild in bot.guilds:
+        voice_client = guild.voice_client
+        if voice_client:
+            queue = get_queue(guild.id)
+            queue.clear()  # Clear the queue before disconnecting
+            await voice_client.disconnect()
     await bot.close()
 
 async def start_discord_bot():
