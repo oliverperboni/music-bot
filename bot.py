@@ -1,3 +1,4 @@
+import signal
 import threading
 import discord
 from discord.ext import commands
@@ -50,7 +51,7 @@ async def play_song(song_info):
 
     FFMPEG_OPTIONS = {
         'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': '-vn'
+        'options': '-vn volume=0.5'
     }
 
     vc.play(discord.FFmpegPCMAudio(song_info['url'], **FFMPEG_OPTIONS),
@@ -250,6 +251,42 @@ async def api_stop():
         await globalCtx.voice_client.disconnect()
     return {"status": "Playback stopped and queue cleared"}
 
+
+@app.get("/queue/")
+async def api_queue():
+    global globalCtx
+    if not globalCtx:
+        return {"error": "No Discord context set. Run !start in Discord."}
+
+    queue = get_queue(globalCtx.guild.id)
+    if not queue:
+        return {"message": "Queue is empty."}
+
+    return {
+        "queue": queue 
+    }
+
+async def close_bot():
+    """Gracefully closes the bot."""
+    
+    print("Shutting down bot...")
+    await globalCtx.voice_client.disconnect()
+    await bot.close()
+
+async def start_discord_bot():
+    """Starts and manages the Discord bot."""
+    try:
+        await bot.start(TOKEN)
+    except Exception as e:
+        print(f"Bot startup error: {e}")
+    finally:  # Ensure cleanup even if there's an error
+        await close_bot()
+
+def signal_handler(sig, frame):
+    """Handles Ctrl+C or program termination."""
+    print('You pressed Ctrl+C or the program terminated!')
+    asyncio.create_task(close_bot()) # Schedule the bot closure
+
 async def start_discord_bot():
     """Starts the Discord bot asynchronously."""
     await bot.start(TOKEN)
@@ -263,5 +300,14 @@ if __name__ == "__main__":
     fastapi_thread = threading.Thread(target=start_fastapi, daemon=True)
     fastapi_thread.start()
 
-    # Start the Discord bot in the main async event loop
-    asyncio.run(start_discord_bot())
+    # Set up signal handler
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler) # Program termination
+
+    # Run the bot in a try-except-finally block
+    try:
+        asyncio.run(start_discord_bot())  # Now starts properly
+    except KeyboardInterrupt:
+        print("Bot terminated by user.")
+    finally:
+        print("Bot shutdown complete.")
