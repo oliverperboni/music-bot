@@ -34,6 +34,32 @@ def get_queue(guild_id):
         queues[guild_id] = deque()
     return queues[guild_id]
 
+async def fetch_song_info(query):
+    """Asynchronously fetch song or playlist info."""
+    ydl_opts = {'format': 'bestaudio/best', 'quiet': True}
+    loop = asyncio.get_running_loop()
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = await loop.run_in_executor(None, lambda: ydl.extract_info(query, download=False))
+
+        if "entries" in info:
+            return [
+                {
+                    'url': entry["url"],
+                    'title': entry.get("title", "Unknown Title"),
+                    'thumbnail': entry.get("thumbnail", None),
+                    'duration': entry.get("duration", 0),
+                    'channel': entry.get("uploader", "Unknown Channel")
+                }
+                for entry in info["entries"]
+            ]
+        return [{
+            'url': info["url"],
+            'title': info.get("title", "Unknown Title"),
+            'thumbnail': info.get("thumbnail", None),
+            'duration': info.get("duration", 0),
+            'channel': info.get("uploader", "Unknown Channel")
+        }]
+
 async def play_song(song_info):
     global globalCtx
     if not globalCtx:
@@ -62,6 +88,8 @@ async def play_song(song_info):
         embed.set_thumbnail(url=song_info['thumbnail'])
     embed.add_field(name="Canal", value=song_info['channel'], inline=True)
     await globalCtx.send(embed=embed)
+
+
 
 async def play_next():
     global globalCtx
@@ -104,46 +132,14 @@ async def play(ctx, *, query: str):
     global globalCtx
     globalCtx = ctx
     queue = get_queue(ctx.guild.id)
-
-    async def fetch_song_info(query):
-        """Extract song or playlist info."""
-        ydl_opts = {'format': 'bestaudio/best', 'quiet': True}
-        loop = asyncio.get_event_loop()
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(query, download=False))
-
-            # If it's a playlist, return all songs
-            if "entries" in info:
-                return [
-                    {
-                        'url': entry["url"],
-                        'title': entry.get("title", "Unknown Title"),
-                        'thumbnail': entry.get("thumbnail", None),
-                        'duration': entry.get("duration", 0),
-                        'channel': entry.get("uploader", "Unknown Channel")
-                    }
-                    for entry in info["entries"]
-                ]
-            # Otherwise, return a single song
-            return [{
-                'url': info["url"],
-                'title': info.get("title", "Unknown Title"),
-                'thumbnail': info.get("thumbnail", None),
-                'duration': info.get("duration", 0),
-                'channel': info.get("uploader", "Unknown Channel")
-            }]
-
-    # Fetch song(s) from query
+    
+    # Fetch songs asynchronously
     songs = await fetch_song_info(f"ytsearch:{query}" if "youtube.com" not in query else query)
-
-    # Add all songs to queue
     queue.extend(songs)
 
-    # If the bot isn't already playing, start playing
     if not ctx.voice_client or not ctx.voice_client.is_playing():
         await play_next()
-
-    # Respond to user
+     
     if len(songs) > 1:
         await ctx.send(f"🎶 Playlist adicionada à fila: **{len(songs)} músicas**!")
     else:
