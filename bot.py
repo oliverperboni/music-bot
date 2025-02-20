@@ -2,6 +2,7 @@ import signal
 import threading
 import discord
 from discord.ext import commands
+from database import engine
 import yt_dlp
 import os
 import asyncio
@@ -10,6 +11,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 import uvicorn
 from pydantic import BaseModel
+
+from database import Base
 
 # Load environment variables
 load_dotenv()
@@ -309,6 +312,7 @@ def start_fastapi():
 
 if __name__ == "__main__":
     # Start FastAPI in a separate thread
+    Base.metadata.create_all(bind=engine)
     fastapi_thread = threading.Thread(target=start_fastapi, daemon=True)
     fastapi_thread.start()
 
